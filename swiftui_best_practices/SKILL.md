@@ -15,6 +15,7 @@ description: SwiftUI 与现代 Swift 开发通用最佳实践经验库，涵盖�
 2.  [并发与异步任务 (Concurrency)](#2-并发与异步任务-concurrency)
 3.  [视图生命周期 (View Lifecycle)](#3-视图生命周期-view-lifecycle)
 4.  [界面本地化 (Localization)](#4-界面本地化-localization)
+5.  [编译性能优化 (Compilation Performance)](#5-编译性能优化-compilation-performance)
 
 
 ---
@@ -195,6 +196,54 @@ Button(label) {
 1.  **代码即文档**: 中文注释让逻辑一目了然。
 2.  **提取自动化**: 本地化工具（如 `xcstrings`）能自动提取这些内容并展示注释。
 3.  **多语种友好**: 英文作为 Key 是国际化开发的通用准则，避免了跨平台或跨系统时的编码问题。
+
+---
+
+## 5. 编译性能优化 (Compilation Performance)
+
+### 5.1 拆分大型视图 (Decomposing Large Views)
+
+**问题描述**: SwiftUI 的类型推导逻辑在处理嵌套极深的视图树或复杂的链式调用时，容易触发编译器超时错误（`The compiler is unable to type-check this expression in reasonable time`）。
+
+**优化方案**:
+*   **提取属性/方法**: 将 `body` 中的逻辑块提取为私有计算属性 (`var`) 或方法 (`func`)，并标记为 `@ViewBuilder`。
+*   **独立子视图**: 对于极其复杂的组件，考虑将其封装为独立的 `struct` 视图。
+*   **控制方法体积**: 如果一个提取出的方法依然超时（例如超过 100ms），应进一步将其拆分为更小的单元。
+
+### 5.2 减少推导压力 (Reducing Inference Pressure)
+
+**优化方案**:
+*   **明确 SwiftData 查询**: 在 `@Query` 中明确谓词的参数和排序描述符的泛型。
+    ```swift
+    // ✅ 推荐：明确参数命名和泛型类型
+    @Query(
+        filter: #Predicate<TranslationJob> { job in job.inProcessing == false },
+        sort: [SortDescriptor<TranslationJob>(\.createdAt, order: .reverse)]
+    ) private var completedJobs: [TranslationJob]
+    ```
+*   **使用完全限定名**: 引用嵌套类型（如 `ViewModel.AlertType`）时，在方法签名中使用全名，避免编译器在命名空间中进行不必要的搜索。
+*   **提取逻辑运算**: 尽量不要在 SwiftUI 组件的参数中进行复杂的逻辑运算，优先在 ViewModel 的计算属性中完成处理。
+
+### 5.3 布局树扁平化 (Flattening the Layout Tree)
+
+**优化方案**:
+*   **使用 Group**: 避免在容器（如 `VStack`, `HStack`）中堆叠过多的子组件。如果子组件超过 10 个，编译器可能会报错或性能下降，此时应使用 `Group` 进行逻辑分组。
+*   **避免过度装饰**: 减少对整个容器应用大量修饰符，尽量将修饰符应用到具体的子视图上。
+
+### 5.4 启用编译时间警告 (Enable Compilation Timing Warnings)
+
+**操作方法**:
+在 Xcode 项目的 **Build Settings** 中，找到 **Other Swift Flags** 选项。
+
+**⚠️ 填入说明**: 在 Xcode 弹出的输入列表中，必须 **一行填入一个参数**（即 `-Xfrontend` 及其紧随的子参数需分行填写）。完整开启需依次填入以下 **4 行**:
+
+1.  `-Xfrontend`
+2.  `-warn-long-function-bodies=100`
+3.  `-Xfrontend`
+4.  `-warn-long-expression-type-checking=100`
+
+**意义**:
+通过主动触发警告，开发者可以在编码阶段及时发现性能瓶颈，避免视图过度堆叠导致的编译效率骤降。
 
 ---
 
