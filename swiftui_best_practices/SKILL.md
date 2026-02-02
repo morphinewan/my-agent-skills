@@ -1,41 +1,44 @@
 ---
 name: swiftui_best_practices
-description: SwiftUI 与现代 Swift 开发通用最佳实践经验库，涵盖通知、并发及生命周期管理。持续迭代中。
+description: SwiftUI 与现代 Swift 开发通用最佳实践经验库，涵盖通知、并发及生命周期管理。
 ---
 
-# SwiftUI & Modern Swift 开发最佳实践
+# SwiftUI Development Rules
 
-本文档用于沉淀在项目开发过程中积累的通用经验、设计模式及针对新 API 的适配方案。将会不断迭代更新。
+## Instruction
+作为 SwiftUI 专家，你的目标是编写类型安全、高性能且易于维护的代码。在开发过程中，必须严格遵守以下约束条件（Constraints），并参考范例（Examples）进行实现。
+
+## Constraints
+
+### 1. 消息通知 (Notifications)
+- **强制强类型**: 严禁使用 `[AnyHashable: Any]` 字典传递数据。必须定义符合 `NotificationMessage` 协议的 Struct。
+- **并发安全**: 消息体必须符合 `Sendable` 协议，禁止包含非线程安全类型（如 `Error?`，应转换为 `String`）。
+- **主线程调度**: 接收通知并更新 UI 状态时，**必须** 显式调度到主线程 (`receive(on: RunLoop.main)` 或 `@MainActor`)。
+
+### 2. 并发与生命周期 (Concurrency & Lifecycle)
+- **优先使用 `.task`**: 所有涉及 `await` 的异步初始化逻辑（如数据加载），**必须** 使用 `.task` 修饰符，而非 `.onAppear`。
+- **拒绝僵尸任务**: 禁止在 ViewModel 的 `init` 中直接启动无管理的 `Task { }`。
+- **结构化并发**: 确保所有后台任务都能随视图销毁自动取消。
+
+### 3. 本地化 (Localization)
+- **英文键值**: 所有 UI 显示的字符串 Key **必须** 使用英文。
+- **中文注释**: **必须** 为每个本地化字符串提供中文 `comment`，用于解释上下文。
+- **格式规范**: 使用 `Text("English", comment: "中文")` 或 `String(localized: "English", comment: "中文")`。
+
+### 4. 编译性能 (Compilation Performance)
+- **拆分视图**: 遇到复杂视图或编译器超时警告时，必须将 `body` 拆分为小的 `@ViewBuilder` 属性或独立的 `struct`。
+- **显式类型**: 在复杂的闭包（如 SwiftData 的 `@Query` 或 `Predicate`）中，**必须** 显式声明参数类型和泛型，减轻编译器推断压力。
+- **扁平化层级**: 容器（`VStack`/`HStack`）内子视图数量建议不超过 10 个，过多时使用 `Group` 分组。
 
 ---
 
-## 目录
+## Examples
 
-1.  [消息通知与通信 (Notifications)](#1-消息通知与通信-notifications)
-2.  [并发与异步任务 (Concurrency)](#2-并发与异步任务-concurrency)
-3.  [视图生命周期 (View Lifecycle)](#3-视图生命周期-view-lifecycle)
-4.  [界面本地化 (Localization)](#4-界面本地化-localization)
-5.  [编译性能优化 (Compilation Performance)](#5-编译性能优化-compilation-performance)
+### 1. 强类型通知实现 (Strongly Typed Notifications)
 
-
----
-
-## 1. 消息通知与通信 (Notifications)
-
-### 场景描述
-在 Swift 6 之前，`NotificationCenter` 缺乏类型安全且容易引发并发数据竞争。本方案借鉴了 Fatbobman 关于 `NotificationCenter.Message` 的设计理念 (Swift 6.2+)，通过轻量级封装实现强类型且并发安全的消息总线。
-
-### 核心原则
-*   **强类型**: 使用 Struct 替代字典 (`userInfo`)。
-*   **无魔法字符串**: 集中管理 `Notification.Name`。
-*   **并发安全**: 结合 Combine 显式调度线程，并强制消息体符合 `Sendable` 协议以便在异步环境安全传输。
-
-### 实现方案
-
-#### 1.1 基础协议
-在 `Utils/NotificationMessage.swift` 定义：
-
+**基础工具 (Infrastructure):**
 ```swift
+// Utils/NotificationMessage.swift
 import Combine
 import Foundation
 
@@ -44,14 +47,12 @@ public protocol NotificationMessage: Sendable {
 }
 
 public extension NotificationCenter {
-    /// 发送强类型消息
-    func post<T: NotificationMessage>(_ message: T, object: Any? = nil, userInfo: [AnyHashable: Any]? = nil) {
-        var info = userInfo ?? [AnyHashable: Any]()
+    func post<T: NotificationMessage>(_ message: T, object: Any? = nil) {
+        var info = [AnyHashable: Any]()
         info["dev.kun.kuncore.notification.message"] = message
         post(name: T.name, object: object, userInfo: info)
     }
 
-    /// 观察强类型消息 (Combine)
     func publisher<T: NotificationMessage>(for type: T.Type, object: AnyObject? = nil) -> AnyPublisher<T, Never> {
         return publisher(for: T.name, object: object)
             .compactMap { $0.userInfo?["dev.kun.kuncore.notification.message"] as? T }
@@ -60,192 +61,67 @@ public extension NotificationCenter {
 }
 ```
 
-#### 1.2 使用范例
-
-**定义消息**:
+**正确用法 (Usage):**
 ```swift
-// 1. 在 Notification+Names.swift 集中定义 Name
-extension Notification.Name {
-    static let downloadProgress = Notification.Name("Module.downloadProgress")
-}
-
-// 2. 定义 Message 结构体 (必须显式或隐式符合 Sendable)
+// 1. 定义消息
 struct DownloadProgressMessage: NotificationMessage {
-    static let name = Notification.Name.downloadProgress
+    static let name = Notification.Name("Module.downloadProgress")
     let taskId: String
     let progress: Double
 }
 
-// ⚠️ 避雷：不要在消息中包含非 Sendable 类型 (如 Error?)
-// 推荐做法：将 Error 降级为 String 或自定义 Sendable 错误枚举
-struct TaskErrorMessage: NotificationMessage {
-    static let name = Notification.Name("TaskError")
-    let errorMessage: String?
-}
-```
-
-**发送**:
-```swift
-NotificationCenter.default.post(DownloadProgressMessage(taskId: "1", progress: 0.5))
-```
-
-**接收 (在 ViewModel 中)**:
-```swift
+// 2. 接收消息 (ViewModel)
 NotificationCenter.default.publisher(for: DownloadProgressMessage.self)
-    .receive(on: RunLoop.main) // 关键：确保 UI 线程安全
+    .receive(on: RunLoop.main) // ✅ Constraint: Explicit Main Thread
     .sink { msg in
-        print("Progress: \(msg.progress)")
+        self.progress = msg.progress
     }
     .store(in: &cancellables)
 ```
 
-#### 1.3 主线程安全 (Main Thread Safety)
+### 2. 生命周期与并发 (Lifecycle)
 
-**原则**: `NotificationCenter` 的通知回调线程取决于发送者所在的线程。如果发送者是在后台线程或 Actor (如 `WhisperModelManager`) 中发送的，回调也会在后台执行。
-
-**规则**: 当在 `.onReceive` 或 Combine 的 `sink` 中修改 SwiftUI 的状态（如 `@State`, `@Published`）时，**必须确保操作在主线程执行**。
-
-**推荐方案**:
-
-1.  **Combine 操作符 (推荐)**: 在 `publisher` 后紧跟 `.receive(on: RunLoop.main)`。
-    ```swift
-    .onReceive(
-        NotificationCenter.default.publisher(for: Message.self)
-            .receive(on: RunLoop.main) // 强制调度到主线程
-    ) { message in
-        self.someState = message.value
-    }
-    ```
-2.  **异步闭包**: 在闭包内使用 `MainActor.run` 或 `Task { @MainActor in ... }`。
-    ```swift
-    .onReceive(NotificationCenter.default.publisher(for: Message.self)) { message in
-        Task { @MainActor in
-            self.someState = message.value
+```swift
+// ✅ Correct: 使用 .task 管理生命周期
+struct UserProfileView: View {
+    @StateObject private var vm = ProfileViewModel()
+    
+    var body: some View {
+        List(vm.items) { item in
+            // ...
+        }
+        .task { 
+            // View 消失时自动取消，再次出现时重新执行
+            await vm.loadData() 
         }
     }
-    ```
+}
 
----
-
-## 2. 并发与异步任务 (Concurrency)
-
-### 2.1 结构化并发 (Structured Concurrency)
-
-*   **避免散漫的 Task**: 尽量不要在 ViewModel `init` 中直接启动 `Task { ... }`，因为这会产生即使 View 销毁了仍在后台运行的“僵尸任务”。
-*   **推荐做法**:
-    *   在 SwiftUI 中使用 `.task` 修饰符（它会自动跟随 View 生命周期取消）。
-    *   如果需要在 ViewModel 内部启动任务，必须持有 `Task` 句柄并在 `deinit` 或清理方法中调用 `.cancel()`。
-
----
-
-## 3. 视图生命周期 (View Lifecycle)
-
-### 3.1 `.onAppear` vs `.task`
-
-| 修饰符 | 特性 | 推荐场景 |
-| :--- | :--- | :--- |
-| `.onAppear` | 同步执行，无自动取消机制 | 简单的状态重置、日志记录、UI 初始配置 |
-| `.task` | 异步执行，View 消失自动取消，View 出现重新执行 | 数据加载、状态同步、订阅异步流 |
-
-**最佳实践**: 涉及到异步操作（await）的初始化逻辑，一律优先使用 `.task`。
-
-```swift
-// ❌ 不推荐
+// ❌ Incorrect: onAppear 无法自动取消异步任务
 .onAppear {
-    Task {
-        await viewModel.loadData()
-    }
-}
-
-// ✅ 推荐
-.task {
-    await viewModel.loadData()
+    Task { await vm.loadData() } 
 }
 ```
 
----
-
-## 4. 界面本地化 (Localization)
-
-### 核心原则
-*   **优先英文 (Content in English)**: 所有的文本标签（Label）内容应优先使用英文书写。
-*   **中文注释 (Chinese Comments)**: 使用 `comment` 参数提供中文解释，这有助于翻译人员理解语境，也方便中文开发者阅读代码。
-
-### 推荐实践
-
-#### 4.1 直接支持注解的控件 (如 Text)
-对于 `Text` 等直接支持 `LocalizedStringKey` 和 `comment` 的组件，直接在构造函数中定义。
+### 3. 本地化规范 (Localization)
 
 ```swift
-// ✅ 推荐做法
-Text("English Label", comment: "中文的注释")
+// ✅ Correct
+Text("Settings", comment: "设置页面标题")
+Button(String(localized: "Delete", comment: "删除按钮")) { ... }
+
+// ❌ Incorrect
+Text("设置") // 错误：使用了中文 Key
+Text("Settings") // 错误：缺少中文注释
 ```
 
-#### 4.2 不直接支持注解的场景 (动态文本或属性)
-对于不支持直接传入 `comment` 的场景（如 `Button` 的 title 字符串，或者非 UI 的字符串常量），使用 `String(localized:comment:)`。
+### 4. 编译优化配置 (Compilation Optimization)
 
-```swift
-// ✅ 对于动态场景或不支持注解的控件
-let label = String(localized: "English label", comment: "中文注释")
-Button(label) {
-    // action
-}
+**Build Settings -> Other Swift Flags:**
+(Add each flag on a new line)
+```text
+-Xfrontend
+-warn-long-function-bodies=100
+-Xfrontend
+-warn-long-expression-type-checking=100
 ```
-
-### 为什么这样做？
-1.  **代码即文档**: 中文注释让逻辑一目了然。
-2.  **提取自动化**: 本地化工具（如 `xcstrings`）能自动提取这些内容并展示注释。
-3.  **多语种友好**: 英文作为 Key 是国际化开发的通用准则，避免了跨平台或跨系统时的编码问题。
-
----
-
-## 5. 编译性能优化 (Compilation Performance)
-
-### 5.1 拆分大型视图 (Decomposing Large Views)
-
-**问题描述**: SwiftUI 的类型推导逻辑在处理嵌套极深的视图树或复杂的链式调用时，容易触发编译器超时错误（`The compiler is unable to type-check this expression in reasonable time`）。
-
-**优化方案**:
-*   **提取属性/方法**: 将 `body` 中的逻辑块提取为私有计算属性 (`var`) 或方法 (`func`)，并标记为 `@ViewBuilder`。
-*   **独立子视图**: 对于极其复杂的组件，考虑将其封装为独立的 `struct` 视图。
-*   **控制方法体积**: 如果一个提取出的方法依然超时（例如超过 100ms），应进一步将其拆分为更小的单元。
-
-### 5.2 减少推导压力 (Reducing Inference Pressure)
-
-**优化方案**:
-*   **明确 SwiftData 查询**: 在 `@Query` 中明确谓词的参数和排序描述符的泛型。
-    ```swift
-    // ✅ 推荐：明确参数命名和泛型类型
-    @Query(
-        filter: #Predicate<TranslationJob> { job in job.inProcessing == false },
-        sort: [SortDescriptor<TranslationJob>(\.createdAt, order: .reverse)]
-    ) private var completedJobs: [TranslationJob]
-    ```
-*   **使用完全限定名**: 引用嵌套类型（如 `ViewModel.AlertType`）时，在方法签名中使用全名，避免编译器在命名空间中进行不必要的搜索。
-*   **提取逻辑运算**: 尽量不要在 SwiftUI 组件的参数中进行复杂的逻辑运算，优先在 ViewModel 的计算属性中完成处理。
-
-### 5.3 布局树扁平化 (Flattening the Layout Tree)
-
-**优化方案**:
-*   **使用 Group**: 避免在容器（如 `VStack`, `HStack`）中堆叠过多的子组件。如果子组件超过 10 个，编译器可能会报错或性能下降，此时应使用 `Group` 进行逻辑分组。
-*   **避免过度装饰**: 减少对整个容器应用大量修饰符，尽量将修饰符应用到具体的子视图上。
-
-### 5.4 启用编译时间警告 (Enable Compilation Timing Warnings)
-
-**操作方法**:
-在 Xcode 项目的 **Build Settings** 中，找到 **Other Swift Flags** 选项。
-
-**⚠️ 填入说明**: 在 Xcode 弹出的输入列表中，必须 **一行填入一个参数**（即 `-Xfrontend` 及其紧随的子参数需分行填写）。完整开启需依次填入以下 **4 行**:
-
-1.  `-Xfrontend`
-2.  `-warn-long-function-bodies=100`
-3.  `-Xfrontend`
-4.  `-warn-long-expression-type-checking=100`
-
-**意义**:
-通过主动触发警告，开发者可以在编码阶段及时发现性能瓶颈，避免视图过度堆叠导致的编译效率骤降。
-
----
-
-*(后续迭代请在此添加新章节)*
-
