@@ -1,6 +1,6 @@
 ---
 name: swiftui_best_practices
-description: SwiftUI 与现代 Swift 开发通用最佳实践经验库，涵盖通知、并发及生命周期管理。
+description: 当被要求进行 SwiftUI 开发时，使用此技能。要求所写代码需要符合此技能要求的SwiftUI 与现代 Swift 开发通用最佳实践经验库，涵盖通知、并发及生命周期管理。
 ---
 
 # SwiftUI Development Rules

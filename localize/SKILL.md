@@ -1,6 +1,6 @@
 ---
 name: localize
-description: 自动化处理 iOS/mac 项目中 .xcstrings 文件的翻译工作，包括提取、翻译和回写。
+description: 当被要求进行本地化处理时，使用此技能。自动化处理 iOS/mac 项目中 .xcstrings 文件的翻译工作，包括提取、翻译和回写。
 ---
 
 # 国际化本地化技能 (Localization Skill)
